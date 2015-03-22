@@ -1,0 +1,212 @@
+-- commons
+data Maybe[A] = Nothing
+	| Just A;
+
+data PolyList[A] = Nil
+	| Cons A (PolyList[A]);
+
+-- parsing.input
+type Position = {column: Int, line: Int};
+type Reader[T] = {first: T, pos: Position, rest: String};
+
+-- parsing.combinator
+type Binding[Symbol, Result] = (PolyList[Symbol], Result);
+type Parser[Symbol, Result] = PolyList[Symbol] -> PolyList[(Binding[Symbol, Result])];
+type CharList = PolyList[Char];
+
+-- Take the first element in an input
+let first[A] (input: PolyList[A]): Maybe[A] =
+	case input of
+		Nil		  -> Nothing[A]
+	|	Cons x xs -> Just[A] x;
+
+-- Take the last element in an input
+let rec last[A] (input: PolyList[A]): Maybe[A] =
+	case input of
+		Nil 	  -> Nothing[A]
+	|	Cons x xs -> case xs of
+						Nil 	  -> Just[A] x
+					|	Cons y ys -> last[A](xs);
+
+-- Take every elements in an input except the first one
+let rest[A] (input: PolyList[A]): Maybe[PolyList[A]] =
+	case input of
+		Nil 	  -> Nothing[PolyList[A]]
+	|	Cons x xs -> Just[PolyList[A]] xs;
+
+-- Take the element located at index in an input. The index starts from 0
+let rec at[A] (index: Int) (input: PolyList[A]): Maybe[A] =
+	case input of
+		Nil 	  -> Nothing[A]
+	|	Cons x xs -> if index <= 0 then Just[A] x
+					 else at[A] (index - 1) (xs);
+
+-- Take the first n elements of a list
+let rec take[A] (n: Int) (input: PolyList[A]): PolyList[A] =
+	case input of
+		Nil		  -> Nil[A]
+	|	Cons x xs -> if n < 1 then Nil[A]
+					 else (Cons[A] x (take[A] (n - 1) (xs)));
+
+-- Drop the first n elements of a list
+let rec drop[A] (n: Int) (input: PolyList[A]): PolyList[A] =
+	case input of
+		Nil 	  -> Nil[A]
+	|	Cons x xs -> if n < 1 then input
+					 else (drop[A] (n - 1) xs);
+
+-- Return the length of the given input list
+let rec size[A] (input: PolyList[A]): Int =
+	case input of
+		Nil 	  -> 0
+	|	Cons x xs -> case rest[A](input) of
+						Nothing -> 1
+					|	Just a  -> 1 + size[A](a);
+
+-- Return whether the given input list is empty or not
+let isEmpty[A] (input: PolyList[A]): Bool =
+	case input of
+		Nil		  -> True
+	|	Cons x xs -> False;
+
+let rec dropBlanks (input: CharList): CharList =
+	case input of
+		Nil -> Nil[Char]
+	|	Cons x xs -> if x == ' ' then dropBlanks (xs)
+					 else input;
+
+-- Reverse the given input list
+let rec reverse[A] (input: PolyList[A]): PolyList[A] =
+	case input of
+		Nil 	  -> Nil[A]
+	|	Cons x xs -> case last[A](input) of
+						Nothing -> Nil[A]
+					|	Just a  -> Cons[A] (a) (reverse[A]((take[A] (size[A](input) - 1) (input))));
+
+-- Append another list to the first list
+let rec append[A] (predecessor: PolyList[A]) (successor: PolyList[A]): PolyList[A] =
+	case predecessor of
+		Nil -> successor
+	|	Cons x xs -> if size[A](xs) == 0 then (Cons[A] x successor)
+					 else (Cons[A] x (append[A](xs)(successor)));
+
+let (++)[A] (predecessor: PolyList[A]) (successor: PolyList[A]): PolyList[A] = append[A] predecessor successor;
+
+-- Flatten the list
+let rec concat[A] (l: PolyList[PolyList[A]]): PolyList[A] =
+	case l of
+		Nil 	  -> Nil[A]
+	|	Cons x xs -> append[A] x (concat[A] xs);
+
+-- Assert whether the given two lists are equal or not
+let rec equals[A] (a: PolyList[A]) (b: PolyList[A]): Bool =
+	case a of
+		Nil -> (case b of
+					Nil 	  -> True
+				|	Cons x xs -> False)
+	|	Cons x xs -> case b of
+						Nil 	  -> False
+					|	Cons y ys -> (x == y) && (equals[A] (xs) (ys));
+
+-- Infix operator of equals
+let (===)[A] (a: PolyList[A]) (b: PolyList[A]): Bool = (equals[A] a b);
+
+-- Create a list with only one element
+let createList[A] (x: A): PolyList[A] =
+	Cons[A] x (Nil[A]);
+
+let rec map[A, B] (f: A -> B) (l: PolyList[A]): PolyList[B] =
+    case l of
+        Nil       -> Nil[B]
+     |  Cons x xs -> Cons[B] (f x) (map [A, B] f xs);
+
+let rec foldl[A, B] (f: A -> B -> B) (x: B) (xs: PolyList[A]): B =
+	if isEmpty[A](xs) then x
+	else 
+		case first[A](xs) of
+			Nothing -> x
+		|	Just a  -> case rest[A](xs) of
+						Nothing -> x
+					|	Just b  -> f a (foldl[A, B] f x b);
+
+let printMaybe(m: Maybe[Char]): String =
+	case m of
+		Nothing -> "Nothing"
+	|	Just a  -> a.toString();
+
+let rec printPolyList(input: PolyList[Char]): String =
+	case input of 
+		Nil 	  -> ""
+	|	Cons x xs -> x.toString().concat(printPolyList(xs));
+
+let rec printBindingPolyList(input: PolyList[Binding[Char, PolyList[Char]]]): String =
+	case input of
+		Nil 	  -> ""
+	|	Cons x xs -> (printPolyList(x._2)).concat(printBindingPolyList(xs));
+
+let rec readPolyList(s: String): PolyList[Char] =
+	if length(s) == 0 then Nil[Char]
+	else (Cons[Char] s.charAt(0) (readPolyList(s.substring(1))));
+
+-- Helpers
+let isDigit (c: Char): Bool = c >= '0' && c <= '9';
+
+let isUpper (c: Char): Bool = c >= 'A' && c <= 'Z';
+
+let isLower (c: Char): Bool = c >= 'a' && c <= 'z';
+
+-- Elementary parsers
+-- Simplest parser that parses any input starts from the given character k
+let symbol(k: Char): Parser[Char, CharList] =
+	\(input: CharList) -> case input of
+								Nil 	  -> Nil[Binding[Char, CharList]]
+							|	Cons x xs -> if x == k then (createList[Binding[Char, CharList]] ((xs), (createList[Char] x)))
+					 						 else Nil[Binding[Char, CharList]];
+
+-- Simple parser that parses any input starts from the given list k
+let token (k: CharList): Parser[Char, CharList] =
+	\(input: CharList) -> case input of
+									Nil 	  -> Nil[Binding[Char, CharList]]
+								|	Cons x xs -> if (k ===[Char] (take[Char] (size[Char](k)) input)) then createList[Binding[Char, CharList]] (xs, k)
+					 							 else Nil[Binding[Char, CharList]];
+
+let satisfy[A] (p: A -> Bool): Parser[A, PolyList[A]] =
+	\(input: PolyList[A]) -> case input of
+									Nil 	  -> Nil[Binding[A, PolyList[A]]]
+								|	Cons x xs -> if (p x) then (createList[Binding[A, PolyList[A]]] ((xs), (createList[A] x)))
+					 							 else Nil[Binding[A, PolyList[A]]];
+
+let succeed[A, R] (result: R): Parser[A, R] =
+	\(input: PolyList[A]) -> createList[Binding[A, R]] (input, result);
+
+let fail[A, R]: Parser[A, R] =
+	\(input: PolyList[A]) -> Nil[Binding[A, R]];
+
+let epsilon[A]: Parser[A, Unit] = succeed[A, Unit] ();
+
+-- Parser Combinator
+let bind[S, A, B] (p: Parser[S, A]) (f: A -> Parser[S, B]): Parser[S, B] =
+    \(input: PolyList[S]) -> concat[Binding[S, B]] (map[Binding[S, A], PolyList[Binding[S, B]]] (\(v: Binding[S, A]) -> f v._2 v._1) (p input));
+
+let (~)[S, A, B] (p1: Parser[S, A]) (p2: Parser[S, B]): Parser[S, (A,B)] =
+	bind[S, A, (A, B)] p1 (\(x: A) -> bind[S, B, (A, B)] p2 (\(y: B) -> succeed[S, (A, B)] (x, y)));
+
+let (<|>)[S, A] (p1: Parser[S, A]) (p2: Parser[S, A]): Parser[S, A] =
+	\(input: PolyList[S]) -> (p1 input) ++[Binding[S, A]] (p2 input);
+
+let sp[R] (p: Parser[Char, R]): Parser[Char, R] = \(input: CharList) -> p (dropBlanks(input));
+
+let (<@)[S, A, B] (p: Parser[S, A]) (f: A -> B): Parser[S, B] =
+	\(input: PolyList[S]) -> map[Binding[S, A], Binding[S, B]] (\(v: Binding[S, A]) -> (v._1, (f v._2))) (p input);
+
+let digit: Parser[Char, Int] =
+	satisfy[Char] isDigit <@[Char, CharList, Int] (\(c: CharList) -> case c of
+																		Nil -> 0
+																	|	Cons x xs -> (x - '0'));
+
+--printBindingPolyList(token[Char] (readPolyList("Hello")) (readPolyList("Hello World")))
+--(token (readPolyList("Hello"))) ~[Char, CharList, CharList] (token (readPolyList("Lyndon")))
+--((symbol 'a') ~[Char, CharList, CharList] (symbol 'b')) (readPolyList("abcd"))
+--((symbol 'a') <|>[Char, CharList] (symbol 'b')) (readPolyList("abcd"))
+--printPolyList(dropBlanks(readPolyList("    Hello")))
+printBindingPolyList(satisfy[Char] isDigit (readPolyList("1234")))
