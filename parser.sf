@@ -18,6 +18,14 @@ type Parser[Symbol, Result] = PolyList[Symbol] -> PolyList[(Binding[Symbol, Resu
 type DetPars[Symbol, Result] = PolyList[Symbol] -> Result;
 type CharList = PolyList[Char];
 
+data Expr = Con Int
+		|	Var CharList
+		|	Fun CharList PolyList[Expr]
+		|	Add Expr Expr
+		|	Min Expr Expr
+		|	Mul Expr Expr
+		|	Div Expr Expr;
+
 -- Take the first element in an input
 let first[A] (input: PolyList[A]): Maybe[A] =
 	case input of
@@ -127,6 +135,8 @@ let (===)[A] (a: PolyList[A]) (b: PolyList[A]): Bool = (equals[A] a b);
 let createList[A] (x: A): PolyList[A] =
 	Cons[A] x (Nil[A]);
 
+let id[A] (x : A) = x;
+
 let rec map[A, B] (f: A -> B) (l: PolyList[A]): PolyList[B] =
     case l of
         Nil       -> Nil[B]
@@ -142,8 +152,22 @@ let rec foldr[A, B] (f: A -> B -> B) (x: B) (xs: PolyList[A]): B =
 		Nothing -> x
 	|	Just a  -> foldr[A, B] f (f a x) (take[A] ((size[A] xs) - 1) xs);
 
+let flip[A, B, C] (f: A -> B -> C) (b: B) (a: A): C = f a b;
+
+let uncurry[A, B, C] (f: A -> B -> C) (t: (A, B)): C = f t._1 t._2;
+
+let ap1[A] (v: (A, A -> A -> A)): A -> A = v._2 v._1;
+
+let ap2[A] (v: (A -> A -> A, A)): A -> A = \(value: A) -> (v._1 value v._2);
+
+let const[A, B] (a: A) (b: B): A = a;
+
+let const1[A, B] (a: A) (b: B): B = b;
+
 -- Helpers
-let max(x: Int) (y: Int) = if x >= y then x else y;
+let max(x: Int) (y: Int): Int = if x >= y then x else y;
+
+let min(x: Int) (y: Int): Int = if x <= y then x else y;
 
 let printMaybe(m: Maybe[Char]): String =
 	case m of
@@ -186,9 +210,11 @@ let isUpper (c: Char): Bool = c >= 'A' && c <= 'Z';
 
 let isLower (c: Char): Bool = c >= 'a' && c <= 'z';
 
+let isAlpha (c: Char): Bool = (isUpper c) && (isLower c);
+
 -- Elementary parsers
 -- Simplest parser that parses any input starts from the given character k
-let symbol(k: Char): Parser[Char, Char] =
+let symbol (k: Char): Parser[Char, Char] =
 	\(input: CharList) -> case input of
 								Nil 	  -> Nil[Binding[Char, Char]]
 							|	Cons x xs -> if x == k then (createList[Binding[Char, Char]] (xs, x))
@@ -202,11 +228,11 @@ let token (k: CharList): Parser[Char, CharList] =
 					 							 else Nil[Binding[Char, CharList]];
 
 -- Parser that checks if given input satisfies the given condition
-let satisfy[A] (p: A -> Bool): Parser[A, PolyList[A]] =
+let satisfy[A] (p: A -> Bool): Parser[A, A] =
 	\(input: PolyList[A]) -> case input of
-									Nil 	  -> Nil[Binding[A, PolyList[A]]]
-								|	Cons x xs -> if (p x) then (createList[Binding[A, PolyList[A]]] ((xs), (createList[A] x)))
-					 							 else Nil[Binding[A, PolyList[A]]];
+									Nil 	  -> Nil[Binding[A, A]]
+								|	Cons x xs -> if (p x) then (createList[Binding[A, A]] (xs, x))
+					 							 else Nil[Binding[A, A]];
 
 -- Parser that always succeeds
 let succeed[S, R] (result: R): Parser[S, R] =
@@ -251,6 +277,10 @@ let (<~)[S, A, B] (p: Parser[S, A]) (q: Parser[S, B]): Parser[S, A] =
 let (~>)[S, A, B] (p: Parser[S, A]) (q: Parser[S, B]): Parser[S, B] =
 	p ~[S, A, B] q <@[S, (A, B), B] (\(v: (A, B)) -> v._2);
 
+-- Sequence parser that concatenates a parsing result to a list of parsing results
+let (<~>)[S, A] (p: Parser[S, A]) (q: Parser[S, PolyList[A]]): Parser[S, PolyList[A]] =
+	p ~[S, A, PolyList[A]] q <@[S, (A, PolyList[A]), PolyList[A]] (\(v: (A, PolyList[A])) -> (Cons[A] v._1 v._2));
+
 {-
 let some[S, R] (p: Parser[S, R]): DetPars[S, R] =
 	\(input: PolyList[S]) -> case first[Binding[S, R]] (just[S, R] p input) of
@@ -260,9 +290,7 @@ let some[S, R] (p: Parser[S, R]): DetPars[S, R] =
 
 -- A parser that parses positive digits
 let digit: Parser[Char, Int] =
-	satisfy[Char] isDigit <@[Char, CharList, Int] (\(c: CharList) -> case c of
-																		Nil -> -1
-																	|	Cons x xs -> (java.lang.Character.digit(x, 10)));
+	satisfy[Char] isDigit <@[Char, Char, Int] (\(c: Char) -> java.lang.Character.digit(c, 10));
 
 -- A parser that parses parentheses
 let rec parens: Parser[Char, ParseTree] =
@@ -299,14 +327,102 @@ let rec many[S, R] (p: Parser[S, R]): Parser[S, PolyList[R]] =
 		<@[S, (R, PolyList[R]), PolyList[R]] (\(v: (R, PolyList[R])) -> Cons[R] v._1 v._2)
 		<|>[S, PolyList[R]] (succeed[S, PolyList[R]] (Nil[R]))) input;
 
+-- A repetition parser that does not accept empty input
+let many1[S, R] (p: Parser[S, R]): Parser[S, PolyList[R]] =
+	\(input: PolyList[S]) ->
+		(p ~[S, R, PolyList[R]] (many[S, R] p)
+		<@[S, (R, PolyList[R]), PolyList[R]] (\(v: (R, PolyList[R])) -> Cons[R] v._1 v._2)) input;
+
 -- A parser that parses natual numbers
 let natrual: Parser[Char, Int] =
 	many[Char, Int] digit <@[Char, PolyList[Int], Int] (\(v: PolyList[Int]) -> foldl[Int, Int] (\(a: Int) -> \(b: Int) -> a * 10 + b) 0 v);
 
+-- An option parser that generates a list with only one element or an empty list
+let option[S, R] (p: Parser[S, R]): Parser[S, PolyList[R]] =
+	p <@[S, R, PolyList[R]] (\(v: R) -> createList[R] v)
+	<|>[S, PolyList[R]] (succeed[S, PolyList[R]] (Nil[R]));
+
+-- A parser that omits the first and the last parse reuslts
+let pack[S, A, B, C] (p1: Parser[S, A]) (p2: Parser[S, B]) (p3: Parser[S, C]): Parser[S, B] =
+	p1 ~>[S, A, B] p2 <~[S, B, C] p3;
+
+let parenthesized[A] (p: Parser[Char, A]): Parser[Char, A] =
+	pack[Char, Char, A, Char] (symbol '(') p (symbol ')');
+
+let bracketed[A] (p: Parser[Char, A]): Parser[Char, A] =
+	pack[Char, Char, A, Char] (symbol '[') p (symbol ']');
+
+let compound[A] (p: Parser[Char, A]): Parser[Char, A] =
+	pack[Char, CharList, A, CharList] (token (readPolyList("begin"))) p (token (readPolyList("end")));
+
+let listOf[S, A, B] (p: Parser[S, A]) (q: Parser[S, B]): Parser[S, PolyList[A]] =
+	p <~>[S, A] (many[S, A] (q ~>[S, B, A] p)) <|>[S, PolyList[A]] (succeed[S, PolyList[A]] (Nil[A]));
+
+let commaList[A] (p: Parser[Char, A]): Parser[Char, PolyList[A]] = listOf[Char, A, Char] p (symbol ',');
+
+let semicList[A] (p: Parser[Char, A]): Parser[Char, PolyList[A]] = listOf[Char, A, Char] p (symbol ';');
+
+let sequence[S, A] (ps: PolyList[Parser[S, A]]): Parser[S, PolyList[A]] = foldr[Parser[S, A], Parser[S, PolyList[A]]] ((<~>)[S, A]) (succeed[S, PolyList[A]] (Nil[A])) ps;
+
+let choice[S, A] (ps: PolyList[Parser[S, A]]): Parser[S, A] = foldr[Parser[S, A], Parser[S, A]] ((<|>)[S, A]) (fail[S, A]) ps;
+
+let chainl[S, A] (p: Parser[S, A]) (q: Parser[S, (A -> A -> A)]): Parser[S, A] =
+	p ~[S, A, PolyList[((A -> A -> A), A)]] (many[S, ((A -> A -> A), A)] (q ~[S, (A -> A -> A), A] p))
+	<@[S, (A, PolyList[((A -> A -> A), A)]), A] uncurry[A, PolyList[((A -> A -> A), A)], A] (foldl[((A -> A -> A), A), A] (flip[((A -> A -> A), A), A, A] (ap2[A])));
+
+let chainr[S, A] (p: Parser[S, A]) (q: Parser[S, (A -> A -> A)]): Parser[S, A] =
+	many[S, (A, (A -> A -> A))] (p ~[S, A, (A -> A -> A)] q) ~[S, PolyList[(A, (A -> A -> A))], A] p
+	<@[S, (PolyList[(A, (A -> A -> A))], A), A] uncurry[PolyList[(A, A -> A -> A)], A, A] (flip[A, PolyList[(A, A -> A -> A)], A] (foldr[(A, A -> A -> A), A] (ap1[A])));
+
+let (<?@)[S, A, R] (p: Parser[S, PolyList[A]]) (t: (R, A -> R)): Parser[S, R] =
+	p <@[S, PolyList[A], R] (\(v: PolyList[A]) -> case v of
+														Nil 	  -> t._1
+												|		Cons x xs -> t._2 x);
+
+let integer: Parser[Char, Int] =
+	(option[Char, Char] (symbol '-') ~[Char, PolyList[Char], Int] natrual)
+	<@[Char, (PolyList[Char], Int), Int] (\(v: (PolyList[Char], Int)) -> case v._1 of
+																	Nil 	  -> v._2
+																  |	Cons x xs -> (-v._2));
+
+ {-
+let fract: Parser[Char, Float] =
+	many[Char, Int] digit <@[Char, PolyList[Int], Float] \(v: PolyList[Int] -> foldr[Int, Float] (\(a: Int) -> \(b: Int) -> (b + a) / 10.0) 0 v);
+-}
+
+let identifier: Parser[Char, CharList] = many1[Char, Char] (satisfy[Char] isAlpha);
+
+let firstResult[S, A] (p: Parser[S, A]): Parser[S, A] =
+	\(input: PolyList[S]) -> case p input of
+								Nil 	  -> Nil[Binding[S, A]]
+							|	Cons x xs -> createList[Binding[S, A]] x;
+
+-- Take all or nothing version of many parser
+let greedy[S, A] (p: Parser[S, A]): Parser[S, PolyList[A]] = firstResult[S, PolyList[A]] (many[S, A] p);
+
+-- Take all or nothing version of many1 parser
+let greedy1[S, A] (p: Parser[S, A]): Parser[S, PolyList[A]] = firstResult[S, PolyList[A]] (many1[S, A] p);
+
+-- A parser that must accept a construction if it is present, but which does not fail if it is not present
+let compulsion[S, A] (p: Parser[S, A]): Parser[S, PolyList[A]] = firstResult[S, PolyList[A]] (option[S, A] p);
+
+let rec fact: Parser[Char, Expr] =
+	(integer <@[Char, Int, Expr] (\(v: Int) -> Con v))
+	<|>[Char, Expr] ((identifier 
+		~[Char, CharList, (CharList -> Expr)]
+			((option[Char, PolyList[Expr]] (parenthesized[PolyList[Expr]] (commaList[Expr] expr)))
+				<?@[Char, PolyList[Expr], (CharList -> Expr)] (Var, (flip[CharList, PolyList[Expr], Expr] Fun))))
+			<@[Char, (CharList, (CharList -> Expr)), Expr] (\(v: (CharList, (CharList -> Expr))) -> v._2 v._1))
+	<|>[Char, Expr] (parenthesized[Expr] expr)
+and term: Parser[Char, Expr] = chainr[Char, Expr] fact (symbol '*' <@[Char, Char, (Expr -> Expr -> Expr)] (\(__: Char) -> Mul)
+							<|>[Char, (Expr -> Expr -> Expr)] (symbol '/' <@[Char, Char, (Expr -> Expr -> Expr)] (\(__: Char) -> Div)))
+and expr: Parser[Char, Expr] = chainr[Char, Expr] term (symbol '+' <@[Char, Char, (Expr -> Expr -> Expr)] (\(__: Char) -> Add)
+							<|>[Char, (Expr -> Expr -> Expr)] (symbol '-' <@[Char, Char, (Expr -> Expr -> Expr)] (\(__: Char) -> Min)));
+
 --(token (readPolyList("Hello"))) ~[Char, CharList, CharList] (token (readPolyList("Lyndon")))
 --printBindingCharResult (((symbol '(') ~>[Char, Char, Char] (symbol 'a') <~[Char, Char, Char] (symbol ')') <|>[Char, Char] (succeed[Char, Char] '.')) (readPolyList("(a)")))
 --((symbol 'a') <|>[Char, Char] (symbol 'b')) (readPolyList("abcd"))
---printBindingPolyList(satisfy[Char] isDigit (readPolyList("1234")))
+satisfy[Char] isDigit (readPolyList("1234"))
 --printBindingIntResult (nesting (readPolyList("()(())()")))
 --parenses (readPolyList("()(())()"))
-printBindingIntResult (natrual (readPolyList("12345678")))
+--printBindingIntResult (natrual (readPolyList("12345678.1")))
