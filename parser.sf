@@ -218,8 +218,8 @@ let printBindingExprResult (input: PolyList[Binding[Char, Expr]]): String =
 		Nil 	  -> ""
 	|	Cons x xs -> printExpr(x._2);
 
-let rec readPolyList(s: String): PolyList[Char] =
-	if length(s) == 0 then Nil[Char]
+let rec readPolyList(s: String): CharList =
+	if s.length() == 0 then Nil[Char]
 	else (Cons[Char] s.charAt(0) (readPolyList(s.substring(1))));
 
 -- Judgements
@@ -301,10 +301,10 @@ let (<~>)[S, A] (p: Parser[S, A]) (q: Parser[S, PolyList[A]]): Parser[S, PolyLis
 	p ~[S, A, PolyList[A]] q <@[S, (A, PolyList[A]), PolyList[A]] (\(v: (A, PolyList[A])) -> (Cons[A] v._1 v._2));
 
 -- A deterministic parser that assumes there is at least one parsing result and returns the first result.
--- If the result list is empty, returns the given default value
-let some[S, R] (default: R) (p: Parser[S, R]): DetPars[S, R] =
+-- If the result list is empty, throws an error
+let some[S, R] (p: Parser[S, R]): DetPars[S, R] =
 	\(input: PolyList[S]) -> case first[Binding[S, R]] (just[S, R] p input) of
-								Nothing -> default
+								Nothing -> error[R] "Parsing Error!!"
 							|	Just b  -> (snd[PolyList[S], R] b);
 
 -- A parser that parses positive digits
@@ -473,19 +473,29 @@ let expr1: Parser[Char, Expr] = foldr[PolyList[Op[Expr]], Parser[Char, Expr]] (g
 -- BNF Grammar Parser Combinators
 type Env[A, B] = PolyList[(A, B)];
 
-let rec assoc[D] (env: Env[Char, D]) (s: Char): Maybe[D] =
+data Symbol = Term CharList
+			| Nont CharList;
+
+let (<==>) (s1: Symbol) (s2: Symbol): Bool =
+	case s1 of
+		Term t1 ->
+			(case s2 of
+				Term t2 -> if t1 ===[Char] t2 then True else False
+			|	Nont n2 -> False)
+	|	Nont n1 ->
+			case s2 of
+				Term t2 -> False
+			|	Nont n2 -> if n1 ===[Char] n2 then True else False;
+
+let rec assoc[D] (env: Env[Symbol, D]) (s: Symbol): D =
 	case env of
-		Nil       -> Nothing[D]
-	|	Cons e es -> if (e._1 == s) then (Just[D] e._2)
-					 else (assoc[D] es s);
+		Nil       -> error[D] "error"
+	|	Cons e es -> if (e._1 <==> s) then e._2 else (assoc[D] es s);
 
 let rec mapenv[S, A, B] (f: A -> B) (env: Env[S, A]): Env[S, B] =
 	case env of
 		Nil       -> Nil[(S, B)]
 	|	Cons e es -> Cons[(S, B)] (e._1, f e._2) (mapenv[S, A, B] f es);
-
-data Symbol = Term CharList
-			| Nont CharList;
 
 type Alt = PolyList[Symbol];
 
@@ -519,8 +529,43 @@ let blockgram: PolyList[Binding[Char, Gram]] =
 
 data GramTree = Node Symbol (PolyList[GramTree]);
 
+let symbol2 (s: Symbol): Parser[Symbol, Symbol] =
+	\(input: Alt) -> case input of
+								Nil 	  -> Nil[Binding[Symbol, Symbol]]
+							|	Cons x xs -> if x <==> s then (createList[Binding[Symbol, Symbol]] (xs, x))
+					 						 else Nil[Binding[Symbol, Symbol]];
 
+let (..)[A, B, C] (f1: B -> C) (f2: A -> B): A -> C = \(a: A) -> f1 (f2 a);
 
+let rec parsSym (gram: Gram) (s: Symbol): Parser[Symbol, GramTree] =
+	case s of
+		Term t -> symbol2 s <@[Symbol, Symbol, PolyList[GramTree]] (\(sym: Symbol) -> Nil[GramTree]) <@[Symbol, PolyList[GramTree], GramTree] (\(gs: PolyList[GramTree]) -> Node s gs)
+	|	Nont n -> parsRhs gram (assoc[Rhs] gram s) <@[Symbol, PolyList[GramTree], GramTree] (\(gs: PolyList[GramTree]) -> Node s gs)
+and parsAlt (gram: Gram) (a: Alt): Parser[Symbol, PolyList[GramTree]] =
+	(sequence[Symbol, GramTree] ..[Alt, PolyList[Parser[Symbol, GramTree]], Parser[Symbol, PolyList[GramTree]]] (map[Symbol, Parser[Symbol, GramTree]] (parsSym gram))) a
+and parsRhs (gram: Gram) (r: Rhs): Parser[Symbol, PolyList[GramTree]] =
+	(choice[Symbol, PolyList[GramTree]] ..[Rhs, PolyList[Parser[Symbol, PolyList[GramTree]]], Parser[Symbol, PolyList[GramTree]]] (map[Alt, Parser[Symbol, PolyList[GramTree]]] (parsAlt gram))) r;
+
+let parsGram (gram: Gram) (start: Symbol): Parser[Symbol, GramTree] = parsSym gram start;
+
+type SymbolSet = Parser[Char, CharList];
+
+-- Context-free Grammar
+type CFG = (SymbolSet, SymbolSet, CharList, Symbol);
+
+-- A parser that converts a type of parser source to tokens then trees
+let twopass[A, B, C] (lex: Parser[A, B]) (synt: Parser[B, C]): Parser[A, C] =
+	\(input: PolyList[A]) ->
+		concat[(PolyList[A], C)] (map[(PolyList[A], PolyList[B]), PolyList[(PolyList[A], C)]] (\(t: (PolyList[A], PolyList[B])) ->
+			map[(PolyList[B], C), (PolyList[A], C)] (\(s: (PolyList[B], C)) -> (t._1, s._2)) (just[B, C] synt t._2))
+				(many[A, B] lex input));
+
+-- Parser Generator
+{-
+let parsgen (cfg: CFG): Parser[Symbol, GramTree] =
+	\(input: Alt) ->
+		bnf cfg._1 cfg._2 <@[Char, Gram, GramTree] (\(g: Gram) -> (some[Symbol, GramTree] ((parsGram g cfg._4) input) cfg._3));
+-}
 -- TESTING CASES
 -- Test of Concatenating parser and partial sequencing parsers ~> and <~
 --printBindingCharResult (((symbol '(') ~>[Char, Char, Char] (symbol 'a') <~[Char, Char, Char] (symbol ')') <|>[Char, Char] (succeed[Char, Char] '.')) (readPolyList("(a)")))
@@ -533,4 +578,5 @@ data GramTree = Node Symbol (PolyList[GramTree]);
 --printBindingIntResult (natrual (readPolyList("12345678.1")))
 
 -- Test of Arithmetic Expression parsers
-printBindingExprResult(expr (readPolyList("1+2*8/4")))
+printBindingExprResult(expr (readPolyList("11+2*8/40")))
+--(Nont (readPolyList "hello")) <==> (Nont (readPolyList "hell"))
