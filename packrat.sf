@@ -1,0 +1,131 @@
+-- Position
+type Position = { posFile: String, posLine: Int, posCol: Int };
+
+-- Helpers
+let div (a: Int) (b: Int): Int = a / b;
+
+let posLargerThan (a: Position) (b: Position): Bool = a.posLine > b.posLine || (a.posLine == b.posLine && a.posCol > b.posCol);
+
+let showPos (pos: Position): String = 
+	"File: ".concat(pos.posFile).concat("  Line: ").concat(pos.posLine.toString()).concat("  Column: ")
+	.concat(pos.posCol.toString());
+
+let showPosRel (a: Position) (b: Position): String =
+	if a.posFile.equals(b.posFile) then
+		if a.posLine == b.posLine then
+			"Column: ".concat(b.posCol.toString())
+		else "Line: ".concat(b.posLine.toString()).concat("  Column: ").concat(b.posCol.toString())
+	else showPos b;
+
+let nextPos (pos: Position) (c: Char): Position =
+	if c == '\n' then pos with {posFile = pos.posFile, posLine = pos.posLine + 1, posCol = 1}
+	else 
+		if c == '\t' then pos with {posFile = pos.posFile, posLine = pos.posLine, posCol = (div (pos.posCol + 7) 8) * 8 + 1}
+		else
+			pos with {posFile = pos.posFile, posLine = pos.posLine, posCol = pos.posCol + 1};
+
+-- Data types used for parsing
+data Maybe[A] = Nothing
+			| 	Just A;
+
+data PolyList[A] = Nil
+			| 	   Cons A (PolyList[A]);
+
+type CharList = PolyList[Char];
+
+let rec readPolyList(s: String): CharList =
+	if s.length() == 0 then Nil[Char]
+	else (Cons[Char] s.charAt(0) (readPolyList(s.substring(1))));
+
+data Result[V] = Parsed V { dvAdditive: Result[Int],
+							dvMultitive: Result[Int],
+							dvPrimary: Result[Int],
+							dvDecimal: Result[Int],
+							dvChar: Result[Char]
+						}
+			  |	 NoParse;
+
+type Derivs = { dvAdditive: Result[Int],
+				dvMultitive: Result[Int],
+				dvPrimary: Result[Int],
+				dvDecimal: Result[Int],
+				dvChar: Result[Char]
+			};
+
+let pAdditive: Derivs -> Result[Int] =
+	\(d: Derivs) -> (case d.dvMultitive of
+						Parsed vleft d1 ->
+							(case d1.dvChar of
+								Parsed c d2 -> if c == '+' then
+									(case d2.dvAdditive of
+										Parsed vright d3 -> Parsed[Int] (vleft + vright) d3
+										|	NoParse -> (case d.dvMultitive of
+															Parsed v d1 -> Parsed[Int] v d1
+														|	NoParse -> NoParse[Int]))
+									else (case d.dvMultitive of
+												Parsed v d1 -> Parsed[Int] v d1
+											|	NoParse -> NoParse[Int])
+							|	NoParse -> (case d.dvMultitive of
+												Parsed v d1 -> Parsed[Int] v d1
+											|	NoParse -> NoParse[Int]))
+					|	NoParse -> (case d.dvMultitive of
+										Parsed v d1 -> Parsed[Int] v d1
+									|	NoParse -> NoParse[Int]));
+
+let pMultitive: Derivs -> Result[Int] =
+	\(d: Derivs) -> (case d.dvMultitive of
+						Parsed vleft d1 ->
+							(case d1.dvChar of
+								Parsed c d2 -> if c == '*' then
+									(case d2.dvMultitive of
+										Parsed vright d3 -> Parsed[Int] (vleft * vright) d3
+										|	NoParse -> (case d.dvPrimary of
+															Parsed v d1 -> Parsed[Int] v d1
+														|	NoParse -> NoParse[Int]))
+									else (case d.dvPrimary of
+												Parsed v d1 -> Parsed[Int] v d1
+											|	NoParse -> NoParse[Int])
+							|	NoParse -> (case d.dvPrimary of
+												Parsed v d1 -> Parsed[Int] v d1
+											|	NoParse -> NoParse[Int]))
+					|	NoParse -> (case d.dvPrimary of
+										Parsed v d1 -> Parsed[Int] v d1
+									|	NoParse -> NoParse[Int]));
+
+let pPrimary: Derivs -> Result[Int] =
+	\(d: Derivs) -> (case d.dvChar of
+						Parsed c d1 -> if c == '(' then
+							(case d1.dvAdditive of
+								Parsed v d2 ->
+									(case d2.dvChar of
+										Parsed c2 d3 -> Parsed[Int] v d3
+									|	NoParse -> (case d.dvDecimal of
+														Parsed v2 d1 -> Parsed[Int] v2 d1
+													|	NoParse -> NoParse[Int]))
+							|	NoParse -> (case d.dvDecimal of
+												Parsed v2 d1 -> Parsed[Int] v2 d1
+											|	NoParse -> NoParse[Int]))
+							else (case d.dvDecimal of
+										Parsed v2 d1 -> Parsed[Int] v2 d1
+									|	NoParse -> NoParse[Int])
+					| NoParse -> (case d.dvDecimal of
+										Parsed v2 d1 -> Parsed[Int] v2 d1
+									|	NoParse -> NoParse[Int]));
+
+-- Parse a decimal digit
+let pDecimal: Derivs -> Result[Int] =
+	\(d: Derivs) -> case d.dvChar of
+						Parsed v d1 ->
+							if v >= '0' && v <= '9' then Parsed[Int] java.lang.Character.digit(v, 10) d1
+							else NoParse[Int]
+					|	NoParse -> NoParse[Int];
+
+let rec parse (cs: CharList): Derivs =
+	{dvAdditive = pAdditive (parse cs), dvMultitive = pMultitive (parse cs), dvPrimary = pPrimary (parse cs), dvDecimal = pDecimal (parse cs), dvChar = (case cs of Cons x xs -> Parsed[Char] x (parse xs) | Nil -> NoParse[Char])};
+
+let eval (cs: CharList): Int =
+	case (parse cs).dvAdditive of
+		Parsed v rem -> v
+	|	NoParse -> error[Int] "Parse error";
+
+showPos({posFile = "hello", posLine = 1, posCol = 2})
